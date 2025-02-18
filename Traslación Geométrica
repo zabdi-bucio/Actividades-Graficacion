@@ -1,0 +1,9 @@
+
+import cv2 as cv
+import numpy as np
+
+img = np.ones((500, 500), dtype=np.uint8) * 255
+
+for i in range(400):
+    for j in range(100, 400):
+        img[i, j] = 0
