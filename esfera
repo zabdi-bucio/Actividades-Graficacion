@@ -1,0 +1,88 @@
+from OpenGL.GL import *
+from OpenGL.GLU import *
+from OpenGL.GLUT import *
+from PIL import Image
+import sys
+
+texture = None
+rotate_x, rotate_y = 0, 0
+mouse_x, mouse_y = 0, 0
+left_button_down = False
+
+def load_texture(path):
+    img = Image.open(path)
+    img_data = img.convert("RGB").tobytes()
+    width, height = img.size
+
+    tex_id = glGenTextures(1)
+    glBindTexture(GL_TEXTURE_2D, tex_id)
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, img_data)
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+    return tex_id
+
+def init():
+    glEnable(GL_DEPTH_TEST)
+    glEnable(GL_TEXTURE_2D)
+    global texture
+    texture = load_texture("tr.png")
+    glClearColor(0.1, 0.1, 0.1, 1)
+
+def display():
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+    glLoadIdentity()
+    glTranslatef(0.0, 0.0, -5.0)
+    glRotatef(rotate_x, 1, 0, 0)
+    glRotatef(rotate_y, 0, 1, 0)
+
+    glBindTexture(GL_TEXTURE_2D, texture)
+    quadric = gluNewQuadric()
+    gluQuadricTexture(quadric, GL_TRUE)
+    gluSphere(quadric, 1.5, 50, 50)
+    gluDeleteQuadric(quadric)
+
+    glutSwapBuffers()
+
+def reshape(w, h):
+    if h == 0: h = 1
+    glViewport(0, 0, w, h)
+    glMatrixMode(GL_PROJECTION)
+    glLoadIdentity()
+    gluPerspective(45, w / h, 1, 100.0)
+    glMatrixMode(GL_MODELVIEW)
+
+def mouse(button, state, x, y):
+    global left_button_down, mouse_x, mouse_y
+    if button == GLUT_LEFT_BUTTON:
+        if state == GLUT_DOWN:
+            left_button_down = True
+            mouse_x, mouse_y = x, y
+        elif state == GLUT_UP:
+            left_button_down = False
+
+def motion(x, y):
+    global rotate_x, rotate_y, mouse_x, mouse_y
+    if left_button_down:
+        dx = x - mouse_x
+        dy = y - mouse_y
+        rotate_y += dx * 0.5
+        rotate_x += dy * 0.5
+        mouse_x, mouse_y = x, y
+        glutPostRedisplay()
+
+def main():
+    glutInit(sys.argv)
+    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH)
+    glutInitWindowSize(800, 600)
+    glutCreateWindow(b"Esfera con Textura")
+    init()
+    glutDisplayFunc(display)
+    glutReshapeFunc(reshape)
+    glutMouseFunc(mouse)
+    glutMotionFunc(motion)
+    glutMainLoop()
+
+if __name__ == '__main__':
+    main()
