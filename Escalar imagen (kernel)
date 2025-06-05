@@ -1,0 +1,46 @@
+
+import cv2 as cv
+import numpy as np
+
+# Cargar la imagen en escala de grises
+img = cv.imread('tr.png', 0)
+
+# Obtener el tamaño de la imagen
+x, y = img.shape
+
+# Definir el factor de escala
+scale_x, scale_y = 2, 2
+
+# Crear una imagen vacía para la imagen escalada
+scaled_img = np.zeros((int(x * scale_y), int(y * scale_x)), dtype=np.uint8)
+
+# Escalar la imagen (modo raw)
+for i in range(x):
+    for j in range(y):
+        scaled_img[i * scale_y, j * scale_x] = img[i, j]
+
+# Definir el kernel de 3x3 para el suavizado
+kernel = np.array([[1/9, 1/9, 1/9],
+                   [1/9, 1/9, 1/9],
+                   [1/9, 1/9, 1/9]])
+
+# Crear una copia de la imagen escalada para aplicar el suavizado
+smoothed_img = scaled_img.copy()
+
+# Aplicar la convolución manualmente para suavizar la imagen
+for i in range(1, scaled_img.shape[0] - 1): 
+    for j in range(1, scaled_img.shape[1] - 1): 
+        # Extraer la región 3x3 alrededor del píxel (i, j)
+        region = scaled_img[i-1:i+2, j-1:j+2]
+        
+        # Aplicar el kernel multiplicando y sumando
+        smoothed_value = np.sum(region * kernel)
+        
+        smoothed_img[i, j] = smoothed_value
+
+# Mostrar las imágenes
+cv.imshow('Imagen Original', img)
+cv.imshow('Imagen Escalada (modo raw)', scaled_img)
+cv.imshow('Imagen Escalada y Suavizada', smoothed_img)
+cv.waitKey(0)
+cv.destroyAllWindows()
