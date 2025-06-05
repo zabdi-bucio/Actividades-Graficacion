@@ -1,0 +1,383 @@
+import os
+import pygame
+from pygame.locals import *
+from OpenGL.GL import *
+from OpenGL.GLU import *
+import cv2
+import numpy as np
+import mediapipe as mp
+
+# Configuración inicial
+tamaño_cubo = 3
+tamaño_cubito_pequeño = 2.2 / tamaño_cubo
+espacio = 0.05
+
+# Configuración de MediaPipe
+mp_manos = mp.solutions.hands
+mp_dibujo = mp.solutions.drawing_utils
+
+# Variables para control de armado/desarmado
+armado = True
+desarmado = False
+velocidad_animacion = 0.05
+factor_desplazamiento = 2.0
+desarmando = False
+armando = False
+progreso_animacion = 0.0
+
+def cargar_textura(ruta_imagen):
+    try:
+        superficie = pygame.image.load(ruta_imagen).convert_alpha()
+        datos_imagen = pygame.image.tostring(superficie, "RGBA", True)
+        ancho, alto = superficie.get_size()
+
+        id_textura = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, id_textura)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, ancho, alto, 0, GL_RGBA, GL_UNSIGNED_BYTE, datos_imagen)
+        glGenerateMipmap(GL_TEXTURE_2D)
+        return id_textura
+    except Exception as e:
+        print(f"Error cargando textura: {e}")
+        return None
+
+def reiniciar_cubo(cubitos):
+    """Restablece el cubo a su posición armada"""
+    for cubito in cubitos:
+        if 'desplazamiento' in cubito:
+            del cubito['desplazamiento']
+
+def desarmar_cubo(cubitos, progreso):
+    """Desarma el cubo progresivamente"""
+    for cubito in cubitos:
+        x, y, z = cubito['posicion']
+        # Cubo central no se mueve
+        if x == 1 and y == 1 and z == 1:
+            continue
+        
+        # Calcula dirección de movimiento basada en la posición
+        direccion = [0, 0, 0]
+        if x == 0:
+            direccion[0] = -1
+        elif x == 2:
+            direccion[0] = 1
+        if y == 0:
+            direccion[1] = -1
+        elif y == 2:
+            direccion[1] = 1
+        if z == 0:
+            direccion[2] = -1
+        elif z == 2:
+            direccion[2] = 1
+            
+        # Aplica el movimiento
+        cubito['desplazamiento'] = [
+            direccion[0] * progreso * factor_desplazamiento,
+            direccion[1] * progreso * factor_desplazamiento,
+            direccion[2] * progreso * factor_desplazamiento
+        ]
+
+def armar_cubo(cubitos, progreso):
+    """Arma el cubo progresivamente"""
+    for cubito in cubitos:
+        if 'desplazamiento' in cubito:
+            # Interpola linealmente hacia la posición original
+            cubito['desplazamiento'] = [
+                cubito['desplazamiento'][0] * (1 - progreso),
+                cubito['desplazamiento'][1] * (1 - progreso),
+                cubito['desplazamiento'][2] * (1 - progreso)
+            ]
+            
+            # Si el desplazamiento es muy pequeño, lo eliminamos
+            if (abs(cubito['desplazamiento'][0]) < 0.01 and 
+                abs(cubito['desplazamiento'][1]) < 0.01 and 
+                abs(cubito['desplazamiento'][2]) < 0.01):
+                del cubito['desplazamiento']
+
+def dibujar_cubito(cubito, texturas):
+    x, y, z = cubito['posicion']
+    pos_x = (x - 1) * (tamaño_cubito_pequeño + espacio)
+    pos_y = (y - 1) * (tamaño_cubito_pequeño + espacio)
+    pos_z = (z - 1) * (tamaño_cubito_pequeño + espacio)
+    mitad = tamaño_cubito_pequeño / 2
+
+    # Aplica desplazamiento si existe
+    if 'desplazamiento' in cubito:
+        dx, dy, dz = cubito['desplazamiento']
+        pos_x += dx
+        pos_y += dy
+        pos_z += dz
+
+    caras = {
+        'frente':  [[ mitad, -mitad,  mitad], [-mitad, -mitad,  mitad], [-mitad,  mitad,  mitad], [ mitad,  mitad,  mitad]],
+        'atras':   [[ mitad, -mitad, -mitad], [ mitad,  mitad, -mitad], [-mitad,  mitad, -mitad], [-mitad, -mitad, -mitad]],
+        'derecha':  [[ mitad, -mitad, -mitad], [ mitad, -mitad,  mitad], [ mitad,  mitad,  mitad], [ mitad,  mitad, -mitad]],
+        'izquierda':   [[-mitad, -mitad,  mitad], [-mitad, -mitad, -mitad], [-mitad,  mitad, -mitad], [-mitad,  mitad,  mitad]],
+        'arriba':    [[-mitad,  mitad,  mitad], [-mitad,  mitad, -mitad], [ mitad,  mitad, -mitad], [ mitad,  mitad,  mitad]],
+        'abajo': [[-mitad, -mitad,  mitad], [ mitad, -mitad,  mitad], [ mitad, -mitad, -mitad], [-mitad, -mitad, -mitad]]
+    }
+
+    coordenadas_textura = [(0, 0), (1, 0), (1, 1), (0, 1)]
+
+    glPushMatrix()
+    glTranslatef(pos_x, pos_y, pos_z)
+
+    for cara, color in cubito['colores'].items():
+        if color:
+            glEnable(GL_TEXTURE_2D)
+            glBindTexture(GL_TEXTURE_2D, texturas[color])
+            glBegin(GL_QUADS)
+            for i in range(4):
+                glTexCoord2fv(coordenadas_textura[i])
+                glVertex3fv(caras[cara][i])
+            glEnd()
+
+    # Dibujar bordes
+    glDisable(GL_TEXTURE_2D)
+    glColor3f(0, 0, 0)
+    glLineWidth(5)
+    vertices = [
+        [ mitad,  mitad, -mitad], [ mitad, -mitad, -mitad], [-mitad, -mitad, -mitad], [-mitad,  mitad, -mitad],
+        [ mitad,  mitad,  mitad], [ mitad, -mitad,  mitad], [-mitad, -mitad,  mitad], [-mitad,  mitad,  mitad]
+    ]
+    bordes = [
+        (0,1),(1,2),(2,3),(3,0),
+        (4,5),(5,6),(6,7),(7,4),
+        (0,4),(1,5),(2,6),(3,7)
+    ]
+    glBegin(GL_LINES)
+    for borde in bordes:
+        for vertice in borde:
+            glVertex3f(*vertices[vertice])
+    glEnd()
+
+    glPopMatrix()
+
+def main():
+    global armado, desarmado, desarmando, armando, progreso_animacion
+    
+    pygame.init()
+    pantalla = (1100, 700)
+    superficie = pygame.display.set_mode(pantalla, DOUBLEBUF | OPENGL)
+    pygame.display.set_caption("Cubo de Rubik 3D con Control por Gestos")
+
+    # Configuración de OpenGL
+    glEnable(GL_DEPTH_TEST)
+    glEnable(GL_TEXTURE_2D)
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE)
+    glClearColor(0.2, 0.2, 0.2, 1)
+
+    glMatrixMode(GL_PROJECTION)
+    gluPerspective(45, pantalla[0]/pantalla[1], 0.1, 50)
+    glMatrixMode(GL_MODELVIEW)
+
+    # Cargar texturas 
+    directorio_texturas = r"C:\Users\Lenovo\Desktop\Bucio\Actividades-Graficacion\Cubo_Rubik"
+    texturas = {
+        'amarillo': cargar_textura(os.path.join(directorio_texturas, "1.png")),
+        'naranja': cargar_textura(os.path.join(directorio_texturas, "2.png")),
+        'rojo':    cargar_textura(os.path.join(directorio_texturas, "rojo.png")),
+        'morado': cargar_textura(os.path.join(directorio_texturas, "4.png")),
+        'verde':  cargar_textura(os.path.join(directorio_texturas, "5.png")),
+        'azul':   cargar_textura(os.path.join(directorio_texturas, "6.png"))
+    }
+
+    if None in texturas.values():
+        print("Fallo en la carga de texturas.")
+        pygame.quit()
+        return
+
+    # Crear cubitos
+    cubitos = []
+    for x in range(tamaño_cubo):
+        for y in range(tamaño_cubo):
+            for z in range(tamaño_cubo):
+                if (x in [0, 2]) or (y in [0, 2]) or (z in [0, 2]):
+                    cubitos.append({
+                        'posicion': [x, y, z],
+                        'colores': {
+                            'frente':  'azul'   if z == 2 else None,
+                            'atras':   'verde'  if z == 0 else None,
+                            'derecha':  'rojo'    if x == 2 else None,
+                            'izquierda':   'morado' if x == 0 else None,
+                            'arriba':    'naranja' if y == 2 else None,
+                            'abajo': 'amarillo' if y == 0 else None
+                        }
+                    })
+
+    # Variables de control
+    rot_x, rot_y = 30, -45
+    zoom = -8
+    raton_presionado = False
+    ultima_pos_raton = (0, 0)
+
+    # Configurar cámara con OpenCV
+    captura = cv2.VideoCapture(0)
+    if not captura.isOpened():
+        print("No se pudo abrir la cámara")
+        camara_activa = False
+    else:
+        camara_activa = True
+        captura.set(cv2.CAP_PROP_FRAME_WIDTH, 340)
+        captura.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+
+    textura_camara = glGenTextures(1)
+    glBindTexture(GL_TEXTURE_2D, textura_camara)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+
+    # Configurar MediaPipe Hands
+    manos = mp_manos.Hands(
+        static_image_mode=False,
+        max_num_hands=1,
+        min_detection_confidence=0.7,
+        min_tracking_confidence=0.5
+    )
+
+    reloj = pygame.time.Clock()
+    ejecutando = True
+    
+    while ejecutando:
+        reloj.tick(60)
+        
+        # Manejo de eventos
+        for evento in pygame.event.get():
+            if evento.type == QUIT or (evento.type == KEYDOWN and evento.key == K_ESCAPE):
+                ejecutando = False
+            elif evento.type == MOUSEBUTTONDOWN:
+                if evento.button == 1:  # Botón izquierdo
+                    raton_presionado = True
+                    ultima_pos_raton = evento.pos
+                elif evento.button == 4:  # Scroll up
+                    zoom += 0.5
+                elif evento.button == 5:  # Scroll down
+                    zoom -= 0.5
+            elif evento.type == MOUSEBUTTONUP:
+                if evento.button == 1:
+                    raton_presionado = False
+            elif evento.type == MOUSEMOTION and raton_presionado:
+                dx = evento.pos[0] - ultima_pos_raton[0]
+                dy = evento.pos[1] - ultima_pos_raton[1]
+                rot_y += dx * 0.5
+                rot_x += dy * 0.5
+                ultima_pos_raton = evento.pos
+            elif evento.type == KEYDOWN:
+                if evento.key == K_d and not desarmando and armado:  # Tecla D para desarmar
+                    desarmando = True
+                    armando = False
+                    progreso_animacion = 0.0
+                    armado = False
+                    desarmado = True
+                elif evento.key == K_r and not armando and desarmado:  # Tecla R para rearmar
+                    armando = True
+                    desarmando = False
+                    progreso_animacion = 0.0
+                    armado = True
+                    desarmado = False
+
+        # Procesamiento de la cámara
+        if camara_activa:
+            ret, cuadro = captura.read()
+            if ret:
+                # Voltear la imagen horizontalmente para efecto espejo
+                cuadro = cv2.flip(cuadro, 1)
+                
+                # Convertir a RGB para MediaPipe
+                imagen_rgb = cv2.cvtColor(cuadro, cv2.COLOR_BGR2RGB)
+                resultados = manos.process(imagen_rgb)
+                
+                # Detección de gestos
+                if resultados.multi_hand_landmarks:
+                    for landmarks_mano in resultados.multi_hand_landmarks:
+                        # Obtener landmarks de los dedos
+                        punta_pulgar = landmarks_mano.landmark[mp_manos.HandLandmark.THUMB_TIP]
+                        punta_indice = landmarks_mano.landmark[mp_manos.HandLandmark.INDEX_FINGER_TIP]
+                        
+                        # Calcular distancia entre pulgar e índice
+                        def distancia(a, b):
+                            return ((a.x - b.x)**2 + (a.y - b.y)**2) ** 0.5
+                        
+                        distancia_pellizco = distancia(punta_pulgar, punta_indice)
+                        
+                        # Dibujar landmarks (opcional)
+                        mp_dibujo.draw_landmarks(
+                            cuadro, landmarks_mano, mp_manos.HAND_CONNECTIONS)
+                        
+                        # Control de zoom basado en gestos
+                        if distancia_pellizco < 0.05:  # Pellizco (zoom in)
+                            zoom += 0.1
+                        elif distancia_pellizco > 0.2:  # Mano abierta (zoom out)
+                            zoom -= 0.1
+                
+                # Preparar textura para OpenGL
+                h, w = cuadro.shape[:2]
+                
+                glBindTexture(GL_TEXTURE_2D, textura_camara)
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, GL_BGR, GL_UNSIGNED_BYTE, cuadro)
+
+        # Animación de desarmado
+        if desarmando:
+            if progreso_animacion < 1.0:
+                progreso_animacion += velocidad_animacion
+                desarmar_cubo(cubitos, progreso_animacion)
+            else:
+                desarmando = False
+                desarmado = True
+
+        # Animación de armado
+        if armando:
+            if progreso_animacion < 1.0:
+                progreso_animacion += velocidad_animacion
+                armar_cubo(cubitos, progreso_animacion)
+            else:
+                armando = False
+                armado = True
+                reiniciar_cubo(cubitos)  
+
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        glLoadIdentity()
+        glTranslatef(0, 0, zoom)
+        glRotatef(rot_x, 1, 0, 0)
+        glRotatef(rot_y, 0, 1, 0)
+
+        for cubito in cubitos:
+            dibujar_cubito(cubito, texturas)
+
+        # Dibujar vista de cámara en esquina inferior izquierda
+        if camara_activa:
+            glDisable(GL_DEPTH_TEST)
+            glMatrixMode(GL_PROJECTION)
+            glPushMatrix()
+            glLoadIdentity()
+            glOrtho(0, pantalla[0], pantalla[1], 0, -1, 1)
+            glMatrixMode(GL_MODELVIEW)
+            glPushMatrix()
+            glLoadIdentity()
+            
+            glEnable(GL_TEXTURE_2D)
+            glBindTexture(GL_TEXTURE_2D, textura_camara)
+            glBegin(GL_QUADS)
+            glTexCoord2f(0, 0); glVertex2f(0, pantalla[1]-120)
+            glTexCoord2f(1, 0); glVertex2f(160, pantalla[1]-120)
+            glTexCoord2f(1, 1); glVertex2f(160, pantalla[1])
+            glTexCoord2f(0, 1); glVertex2f(0, pantalla[1])
+            glEnd()
+            glDisable(GL_TEXTURE_2D)
+            
+            glMatrixMode(GL_PROJECTION)
+            glPopMatrix()
+            glMatrixMode(GL_MODELVIEW)
+            glPopMatrix()
+            glEnable(GL_DEPTH_TEST)
+
+        pygame.display.flip()
+
+    if camara_activa:
+        captura.release()
+    pygame.quit()
+
+if __name__ == "__main__":
+    main()
